@@ -239,10 +239,11 @@ Popup {
 
     function loadOrganizationsForAction() {
         // Запрашиваем организации и файлы только для текущего действия
-        var orgs = appData.getOrganizationsWithFilesForActionExecution(actionDetailsDialog.executionId)
+        var currentActionId = getCurrentActionId()
+        var orgs = appData.getOrganizationsWithFilesForActionExecution(currentActionId)
         if (orgs) {
             actionDetailsDialog.allOrganizations = orgs
-            console.log("QML: Загружено", orgs.length, "организаций для действия", actionDetailsDialog.executionId)
+            console.log("QML: Загружено", orgs.length, "организаций для действия ID", currentActionId)
         } else {
             actionDetailsDialog.allOrganizations = []
             console.log("QML: Организации для действия не найдены")
