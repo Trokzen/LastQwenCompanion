@@ -993,7 +993,7 @@ class SQLiteDatabaseManager:
         Получает список всех действий для заданного алгоритма, отсортированных по времени начала (start_offset).
         Поддерживает сортировку как по числовым значениям (секунды), так и по формату времени (HH:MM:SS).
         :param algorithm_id: ID алгоритма.
-        :return: Список словарей с данными действий.
+        :return: Список словарей с данными действий, включая selected_organizations в виде массива объектов.
         """
         if not isinstance(algorithm_id, int) or algorithm_id <= 0:
             logger.warning("Некорректный ID алгоритма для получения действий.")
@@ -1043,6 +1043,9 @@ class SQLiteDatabaseManager:
                     else:
                         # оставляем как есть или преобразуем в строку принудительно
                         action_dict[time_field] = str(action_dict[time_field])
+
+                # Загружаем организации и файлы из новых таблиц
+                action_dict['selected_organizations'] = self._get_action_template_organizations(action_dict['id'])
 
                 actions_list.append(action_dict)
 
@@ -1270,6 +1273,13 @@ class SQLiteDatabaseManager:
             logger.debug(f"Значения для вставки: {values}")
             cursor.execute(sql_query, values)
             new_id = cursor.lastrowid
+            
+            # Проверяем, есть ли данные об организациях для сохранения
+            organizations_data = action_data.get('selected_organizations')
+            if new_id and organizations_data:
+                # Сохраняем связи с организациями и файлами
+                self.update_action_with_organizations(new_id, organizations_data)
+            
             conn.commit()
             cursor.close()
 
@@ -1370,6 +1380,13 @@ class SQLiteDatabaseManager:
             print(f"DEBUG UPDATE action {action_id}: SQL = {sql_query}")
             print(f"DEBUG UPDATE action {action_id}: VALUES = {values}")
             cursor.execute(sql_query, values)
+            
+            # Проверяем, есть ли данные об организациях для сохранения
+            organizations_data = action_data.get('selected_organizations')
+            if organizations_data:
+                # Обновляем связи с организациями и файлами
+                self.update_action_with_organizations(action_id, organizations_data)
+            
             conn.commit()
 
             rows_affected = cursor.rowcount
@@ -3513,7 +3530,7 @@ class SQLiteDatabaseManager:
     def get_organizations_for_action(self, action_id: int) -> list:
         """
         Получить организации с их файлами для конкретного действия (шаблона).
-        Читает данные из поля selected_organizations в таблице actions.
+        Читает данные из новых таблиц action_template_organizations и action_template_org_files.
         Подтягивает ТОЛЬКО выбранные файлы для каждой организации.
         """
         try:
@@ -3521,32 +3538,22 @@ class SQLiteDatabaseManager:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # Получаем JSON структуру с организациями и выбранными файлами
-            query = "SELECT selected_organizations FROM actions WHERE id = ?"
-            cursor.execute(query, (action_id,))
-            result = cursor.fetchone()
+            # Получаем связи организаций с действием из новой таблицы
+            cursor.execute("""
+                SELECT organization_id 
+                FROM action_template_organizations 
+                WHERE action_id = ?
+                ORDER BY organization_id
+            """, (action_id,))
+            org_rows = cursor.fetchall()
             
-            if not result or not result[0]:
+            if not org_rows:
                 cursor.close()
                 conn.close()
                 return []
             
-            # Парсим JSON - теперь это структура вида [{id: org_id, selected_files: [file_ids]}]
-            import json
-            organizations_data = json.loads(result[0])
-            
-            if not organizations_data:
-                cursor.close()
-                conn.close()
-                return []
-            
-            # Извлекаем все ID организаций для одного запроса
-            org_ids = [item.get('id') for item in organizations_data if isinstance(item, dict) and 'id' in item]
-            
-            if not org_ids:
-                cursor.close()
-                conn.close()
-                return []
+            # Извлекаем ID организаций
+            org_ids = [row[0] for row in org_rows]
             
             # Получаем данные организаций одним запросом
             placeholders = ','.join('?' * len(org_ids))
@@ -3564,43 +3571,22 @@ class SQLiteDatabaseManager:
             cursor.execute(query, org_ids)
             orgs_result = [dict(row) for row in cursor.fetchall()]
             
-            # Формируем словарь для быстрого поиска организаций по ID
-            orgs_map = {org['id']: org for org in orgs_result}
-            
             final_organizations = []
             
-            # Для каждой организации из сохраненной структуры
-            for item in organizations_data:
-                if not isinstance(item, dict) or 'id' not in item:
-                    continue
-                    
-                org_id = item['id']
-                if org_id not in orgs_map:
-                    continue
-                    
-                org = orgs_map[org_id].copy()
-                selected_file_ids = item.get('selected_files', [])
+            # Для каждой организации получаем выбранные файлы
+            for org in orgs_result:
+                org_id = org['id']
                 
-                # Если есть выбранные файлы - подтягиваем только их
-                if selected_file_ids and isinstance(selected_file_ids, list) and len(selected_file_ids) > 0:
-                    # Формируем плейсхолдеры для ID файлов
-                    file_placeholders = ','.join('?' * len(selected_file_ids))
-                    files_query = f"""
-                        SELECT 
-                            id,
-                            file_path,
-                            file_type,
-                            created_at
-                        FROM organization_reference_files
-                        WHERE organization_id = ? AND id IN ({file_placeholders})
-                        ORDER BY file_type, file_path
-                    """
-                    cursor.execute(files_query, [org_id] + selected_file_ids)
-                    org['reference_files'] = [dict(row) for row in cursor.fetchall()]
-                else:
-                    # Если нет выбранных файлов - возвращаем пустой список
-                    org['reference_files'] = []
+                # Получаем только выбранные файлы из новой таблицы
+                cursor.execute("""
+                    SELECT f.id, f.file_path, f.file_type, f.created_at
+                    FROM action_template_org_files tf
+                    JOIN organization_reference_files f ON tf.reference_file_id = f.id
+                    WHERE tf.action_id = ? AND tf.organization_id = ?
+                    ORDER BY f.file_type, f.file_path
+                """, (action_id, org_id))
                 
+                org['reference_files'] = [dict(row) for row in cursor.fetchall()]
                 final_organizations.append(org)
             
             cursor.close()
@@ -3610,38 +3596,119 @@ class SQLiteDatabaseManager:
             logger.error(f"SQLiteDatabaseManager: Ошибка при получении организаций для действия {action_id}: {e}")
             return []
 
-    def update_action_with_organizations(self, action_id: int, organizations_data: list) -> bool:
+    def _get_action_template_organizations(self, action_id: int) -> list:
         """
-        Обновить действие, добавив выбранные организации с их выбранными файлами.
-        Сохраняет JSON структуру вида: [{id: org_id, selected_files: [file_id1, file_id2, ...]}]
-        в поле selected_organizations.
+        Внутренний метод для получения списка организаций и файлов для шаблона действия.
+        Возвращает структуру в формате QML: [{"id": org_id, "selected_files": [file_id1, file_id2, ...]}, ...]
         
         :param action_id: ID действия (шаблона)
-        :param organizations_data: Список словарей с полями 'id' (ID организации) и 'selected_files' (список ID выбранных файлов)
+        :return: Список словарей с ID организации и списком ID выбранных файлов
         """
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # Преобразуем структуру организаций с файлами в JSON
-            import json
-            orgs_json = json.dumps(organizations_data)
+            # Получаем все связи организаций с данным действием
+            cursor.execute("""
+                SELECT organization_id 
+                FROM action_template_organizations 
+                WHERE action_id = ?
+                ORDER BY organization_id
+            """, (action_id,))
+            org_rows = cursor.fetchall()
             
-            # Обновляем действие
-            query = "UPDATE actions SET selected_organizations = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
-            cursor.execute(query, (orgs_json, action_id))
-            
-            if cursor.rowcount > 0:
-                conn.commit()
-                logger.info(f"SQLiteDatabaseManager: Действие {action_id} обновлено. Выбрано организаций: {len(organizations_data)}")
+            if not org_rows:
                 cursor.close()
                 conn.close()
-                return True
-            else:
-                logger.warning(f"SQLiteDatabaseManager: Действие {action_id} не найдено для обновления.")
-                cursor.close()
-                conn.close()
-                return False
+                return []
+            
+            result = []
+            for org_row in org_rows:
+                org_id = org_row[0]
+                
+                # Получаем все выбранные файлы для этой организации
+                cursor.execute("""
+                    SELECT reference_file_id 
+                    FROM action_template_org_files 
+                    WHERE action_id = ? AND organization_id = ?
+                    ORDER BY reference_file_id
+                """, (action_id, org_id))
+                file_rows = cursor.fetchall()
+                
+                selected_files = [row[0] for row in file_rows]
+                
+                result.append({
+                    "id": org_id,
+                    "selected_files": selected_files
+                })
+            
+            cursor.close()
+            conn.close()
+            return result
         except Exception as e:
-            logger.error(f"SQLiteDatabaseManager: Ошибка при обновлении действия {action_id} с организациями: {e}")
+            logger.error(f"SQLiteDatabaseManager: Ошибка при получении связей шаблона действия {action_id} с организациями: {e}")
+            return []
+
+    def update_action_with_organizations(self, action_id: int, organizations_data: list) -> bool:
+        """
+        Обновить связи шаблона действия с организациями и файлами.
+        Использует новые таблицы action_template_organizations и action_template_org_files.
+        
+        :param action_id: ID действия (шаблона)
+        :param organizations_data: Список словарей с полями 'id' (ID организации) и 'selected_files' (список ID выбранных файлов)
+                                   Пример: [{"id": 1, "selected_files": [10, 11]}, {"id": 2, "selected_files": []}]
+        :return: True если успешно, иначе False
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Включаем поддержку внешних ключей
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            
+            # 1. Удаляем старые связи файлов для данного action_id
+            cursor.execute("DELETE FROM action_template_org_files WHERE action_id = ?", (action_id,))
+            
+            # 2. Удаляем старые связи организаций для данного action_id
+            cursor.execute("DELETE FROM action_template_organizations WHERE action_id = ?", (action_id,))
+            
+            # 3. Вставляем новые связи
+            if organizations_data and len(organizations_data) > 0:
+                for org_item in organizations_data:
+                    org_id = org_item.get('id')
+                    selected_files = org_item.get('selected_files', [])
+                    
+                    if org_id is None:
+                        logger.warning(f"SQLiteDatabaseManager: Пропущена организация без ID в данных для действия {action_id}")
+                        continue
+                    
+                    # Вставляем связь с организацией
+                    cursor.execute(
+                        "INSERT INTO action_template_organizations (action_id, organization_id) VALUES (?, ?)",
+                        (action_id, org_id)
+                    )
+                    
+                    # Вставляем связи с файлами
+                    if selected_files and len(selected_files) > 0:
+                        for file_id in selected_files:
+                            cursor.execute(
+                                "INSERT INTO action_template_org_files (action_id, organization_id, reference_file_id) VALUES (?, ?, ?)",
+                                (action_id, org_id, file_id)
+                            )
+            
+            # Также обновляем JSON в поле selected_organizations для обратной совместимости
+            import json
+            orgs_json = json.dumps(organizations_data if organizations_data else [])
+            cursor.execute("UPDATE actions SET selected_organizations = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", 
+                          (orgs_json, action_id))
+            
+            conn.commit()
+            logger.info(f"SQLiteDatabaseManager: Связи действия {action_id} с организациями обновлены. Организаций: {len(organizations_data) if organizations_data else 0}")
+            cursor.close()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"SQLiteDatabaseManager: Ошибка при обновлении связей действия {action_id} с организациями: {e}")
+            if conn:
+                conn.rollback()
             return False

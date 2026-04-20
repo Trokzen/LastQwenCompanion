@@ -1686,26 +1686,10 @@ class ApplicationData(QObject):
             print(f"Python: Ошибка - organizations_data должен быть списком. Получен тип: {type(organizations_data)}")
             return False
         
-        # Извлекаем ID организаций из списка объектов
-        organization_ids = []
-        for org_item in organizations_data:
-            if isinstance(org_item, dict):
-                # Ожидаем объект {"id": ..., "selected_files": [...]}
-                org_id = org_item.get('id')
-                if not isinstance(org_id, int):
-                    print(f"Python: Ошибка - ID организации должен быть целым числом. Получено: {org_id} (тип: {type(org_id)})")
-                    return False
-                organization_ids.append(org_id)
-            elif isinstance(org_item, int):
-                # Допускаем также простой список ID
-                organization_ids.append(org_item)
-            else:
-                print(f"Python: Ошибка - Неверный формат элемента организаций: {org_item} (тип: {type(org_item)})")
-                return False
-        
+        # Передаем данные напрямую в базу данных (список словарей с id и selected_files)
         if self.database_manager:
             try:
-                success = self.database_manager.update_action_with_organizations(action_id, organization_ids)
+                success = self.database_manager.update_action_with_organizations(action_id, organizations_data)
                 if success:
                     print(f"Python: Организации для действия ID {action_id} успешно обновлены.")
                     return True
