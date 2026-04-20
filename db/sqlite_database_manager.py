@@ -1071,7 +1071,7 @@ class SQLiteDatabaseManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, algorithm_id, description, technical_text, start_offset, end_offset, contact_phones, report_materials FROM actions WHERE id = ?;",
+                "SELECT id, algorithm_id, description, technical_text, start_offset, end_offset, contact_phones, report_materials, selected_organizations FROM actions WHERE id = ?;",
                 (action_id,)
             )
             row = cursor.fetchone()

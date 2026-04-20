@@ -365,7 +365,8 @@ Item {
                             "start_offset": startOffsetValue, // Может быть строкой, null или undefined
                             "end_offset": endOffsetValue,     // Может быть строкой, null или undefined
                             "contact_phones": action["contact_phones"] || "",
-                            "report_materials": action["report_materials"] || ""
+                            "report_materials": action["report_materials"] || "",
+                            "selected_organizations": action["selected_organizations"] || "[]"
                             // Добавьте другие поля, если они нужны для отображения в списке
                         });
                         // --- ---
