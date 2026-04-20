@@ -1667,10 +1667,10 @@ class ApplicationData(QObject):
             return []
 
     @Slot(int, 'QVariant', result=bool)
-    def updateActionOrganizations(self, action_id: int, organization_ids: 'QVariant') -> bool:
+    def updateActionOrganizations(self, action_id: int, organizations_data: 'QVariant') -> bool:
         """
         Обновить организации, привязанные к действию.
-        organization_ids - список ID организаций.
+        organizations_data - список объектов вида {"id": org_id, "selected_files": [file_id1, file_id2, ...]}.
         """
         print(f"Python: QML отправил запрос на обновление организаций для действия ID {action_id}.")
         
@@ -1679,17 +1679,28 @@ class ApplicationData(QObject):
             return False
         
         # Преобразуем QVariant в список
-        if hasattr(organization_ids, 'toVariant'):
-            organization_ids = organization_ids.toVariant()
+        if hasattr(organizations_data, 'toVariant'):
+            organizations_data = organizations_data.toVariant()
         
-        if not isinstance(organization_ids, list):
-            print(f"Python: Ошибка - organization_ids должен быть списком. Получен тип: {type(organization_ids)}")
+        if not isinstance(organizations_data, list):
+            print(f"Python: Ошибка - organizations_data должен быть списком. Получен тип: {type(organizations_data)}")
             return False
         
-        # Проверяем, что все элементы - целые числа
-        for org_id in organization_ids:
-            if not isinstance(org_id, int):
-                print(f"Python: Ошибка - Все ID организаций должны быть целыми числами.")
+        # Извлекаем ID организаций из списка объектов
+        organization_ids = []
+        for org_item in organizations_data:
+            if isinstance(org_item, dict):
+                # Ожидаем объект {"id": ..., "selected_files": [...]}
+                org_id = org_item.get('id')
+                if not isinstance(org_id, int):
+                    print(f"Python: Ошибка - ID организации должен быть целым числом. Получено: {org_id} (тип: {type(org_id)})")
+                    return False
+                organization_ids.append(org_id)
+            elif isinstance(org_item, int):
+                # Допускаем также простой список ID
+                organization_ids.append(org_item)
+            else:
+                print(f"Python: Ошибка - Неверный формат элемента организаций: {org_item} (тип: {type(org_item)})")
                 return False
         
         if self.database_manager:

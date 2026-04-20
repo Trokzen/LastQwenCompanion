@@ -1003,7 +1003,7 @@ class SQLiteDatabaseManager:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, algorithm_id, description, technical_text, start_offset, end_offset, contact_phones, report_materials, created_at, updated_at "
+                "SELECT id, algorithm_id, description, technical_text, start_offset, end_offset, contact_phones, report_materials, created_at, updated_at, selected_organizations "
                 "FROM actions "
                 "WHERE algorithm_id = ? "
                 "ORDER BY "
